@@ -5,13 +5,11 @@ from bs4 import BeautifulSoup
 from serpapi import GoogleSearch
 import pandas as pd
 
-# 🔑 SerpAPI Key
+# 🔑 SerpAPI Key (you can move this to st.secrets if deployed on Streamlit Cloud)
 SERPAPI_KEY = "7f613256d9f99b7ca4c2430fa24965e5f43960fcd6547405e63df23f461b3aec"
 
-# Untrusted domains
+# Domains to exclude
 IGNORE_SITES = ['intelius.com', 'rocketreach.co', 'zoominfo.com', 'aeroleads.com']
-
-# Generic email usernames that shouldn't be considered executive patterns
 GENERIC_EMAILS = ["info", "contact", "admin", "support", "sales", "help"]
 
 def is_valid_source(url):
@@ -41,7 +39,7 @@ def fetch_search_results(query, num=10):
                 })
         return links
     except Exception as e:
-        st.error(f"Error fetching results: {e}")
+        st.error(f"Error fetching results from SerpAPI: {e}")
         return []
 
 def extract_domain(email):
@@ -65,45 +63,44 @@ def check_email_exact(email):
 
 def check_domain_pattern(email):
     domain = extract_domain(email)
-    domain_query = f'"@{domain}"'
-    results = fetch_search_results(domain_query)
+    results = fetch_search_results(f'"@{domain}"')
 
     exec_emails_found = []
 
     for item in results:
-        url = item["link"]
+        url = item.get("link", "")
         if is_valid_source(url):
             try:
-                r = requests.get(url, timeout=10)
-                soup = BeautifulSoup(r.text, 'html.parser')
+                response = requests.get(url, timeout=10)
+                if response.status_code != 200:
+                    continue
+                soup = BeautifulSoup(response.text, 'html.parser')
                 found_emails = re.findall(r"[a-zA-Z0-9_.+-]+@" + re.escape(domain), soup.text)
                 found_emails = list(set(found_emails))
                 found_emails = [e for e in found_emails if e.lower() != email.lower()]
                 exec_emails = [e for e in found_emails if is_executive_email(e)]
                 if exec_emails:
                     return f"Pattern Verified (Based on: {', '.join(exec_emails[:3])}, Source: {url})"
-            except:
+            except Exception as err:
                 continue
 
     return "Not Verified"
 
 def verify_email(email):
     result = check_email_exact(email)
-    if result:
-        return result
-    else:
-        return check_domain_pattern(email)
+    return result if result else check_domain_pattern(email)
 
-# Streamlit UI
+# --- Streamlit UI ---
 st.title("📧 Email Verifier Tool")
-st.write("Enter email addresses manually or upload a .csv/.txt file.")
+st.write("Upload a file or paste emails to verify if they are real and follow valid patterns.")
 
-email_input = st.text_area("Enter emails separated by comma or newline")
+email_input = st.text_area("Enter email(s) separated by commas or newlines")
 file_upload = st.file_uploader("Or upload a .csv or .txt file", type=["csv", "txt"])
 
 emails = []
+
 if email_input:
-    emails += [e.strip() for e in re.split(r'[\n,]+', email_input) if e.strip()]
+    emails += [e.strip() for e in re.split(r'[\\n,]+', email_input) if e.strip()]
 
 if file_upload:
     if file_upload.name.endswith(".csv"):
@@ -111,7 +108,7 @@ if file_upload:
         emails += df_uploaded.iloc[:, 0].dropna().astype(str).tolist()
     elif file_upload.name.endswith(".txt"):
         content = file_upload.read().decode("utf-8")
-        emails += [e.strip() for e in re.split(r'[\n,]+', content) if e.strip()]
+        emails += [e.strip() for e in re.split(r'[\\n,]+', content) if e.strip()]
 
 emails = list(set(emails))  # Remove duplicates
 
@@ -126,10 +123,10 @@ if emails:
             results.append({"Email": email, "Status": status})
 
         df_results = pd.DataFrame(results)
-        st.write("## ✅ Verification Results")
+        st.success("Verification complete!")
         st.dataframe(df_results)
 
         csv = df_results.to_csv(index=False)
-        st.download_button("⬇️ Download Results", csv, "verification_results.csv", "text/csv")
+        st.download_button("⬇️ Download Results", csv, "verified_emails.csv", "text/csv")
 else:
-    st.info("Enter at least one email address or upload a file.")
+    st.info("Please provide at least one email.")
